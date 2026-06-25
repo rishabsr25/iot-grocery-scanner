@@ -2,7 +2,25 @@
 
 Firmware for an ESP32-WROOM-32 paired with an Adafruit OV5640 camera module, designed to capture barcode images on a button press and stream them over WiFi for decoding. Built as the hardware sensing layer for a larger grocery price optimization project that pulls live pricing via the Kroger and Walmart APIs and calculates optimized shopping routes.
 
-This repo currently includes the **Python barcode decoder** for low-resolution camera frames. ESP32 firmware will live here as the project grows.
+This repo includes ESP32 firmware and a **Python barcode decoder** for low-resolution camera frames.
+
+## ESP32 firmware
+
+Sketch: `firmware/ESP32_Camera_Viewer/`
+
+- MJPEG stream at `http://<esp32-ip>:81/stream`
+- GPIO14 button toggles streaming on/off
+- QQVGA (160x120), 10 MHz XCLK, single frame buffer (no PSRAM)
+
+### WiFi credentials
+
+Copy `firmware/ESP32_Camera_Viewer/secrets.h.example` to `secrets.h` in the same folder and fill in your network name/password. `secrets.h` is gitignored.
+
+Your Arduino IDE copy lives at:
+
+`C:\Users\risha\OneDrive\Documents\Arduino\ESP32_Camera_Viewer\`
+
+To work from the repo in Arduino IDE, open the sketch from `firmware/ESP32_Camera_Viewer/` instead (or copy that folder into your sketchbook).
 
 ## Barcode decoder
 

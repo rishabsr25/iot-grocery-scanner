@@ -6,6 +6,7 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 samples/
+firmware/**/secrets.h
 *.jpg
 *.jpeg
 *.png
