@@ -1,11 +1,18 @@
-# ESP32 Barcode Decoder
+# IoT Grocery Scanner
 
-Decode 1D barcodes from low-resolution photos captured by an ESP32 + OV5640 camera rig. Built for **160x120 (QQVGA)** JPEG frames where breadboard wiring limits usable resolution.
+Firmware for an ESP32-WROOM-32 paired with an Adafruit OV5640 camera module, designed to capture barcode images on a button press and stream them over WiFi for decoding. Built as the hardware sensing layer for a larger grocery price optimization project that pulls live pricing via the Kroger and Walmart APIs and calculates optimized shopping routes.
 
-## Setup (Windows)
+This repo currently includes the **Python barcode decoder** for low-resolution camera frames. ESP32 firmware will live here as the project grows.
+
+## Barcode decoder
+
+Decode 1D barcodes from low-resolution photos captured by the ESP32 + OV5640 rig. Built for **160x120 (QQVGA)** JPEG frames where breadboard wiring limits usable resolution.
+
+### Setup (Windows)
 
 ```powershell
-cd C:\Users\risha\Projects\esp32-barcode-decoder
+git clone https://github.com/rishabsr25/iot-grocery-scanner.git
+cd iot-grocery-scanner
 py -3 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
@@ -13,7 +20,7 @@ pip install -r requirements.txt
 
 `pyzbar` ships Windows wheels with bundled ZBar DLLs — no separate ZBar install required.
 
-## Usage
+### Usage
 
 ```powershell
 python decode_barcode.py path\to\your\barcode.jpg
@@ -25,7 +32,7 @@ Optional: save preprocessing variants for inspection:
 python decode_barcode.py path\to\your\barcode.jpg --save-debug debug_out
 ```
 
-### What the script tries
+#### What the script tries
 
 1. Original image (as-is)
 2. Grayscale
@@ -35,7 +42,7 @@ python decode_barcode.py path\to\your\barcode.jpg --save-debug debug_out
 
 The first stage that succeeds wins. Exit code `0` = barcode found, `2` = not found.
 
-## pyzbar (ZBar) vs OpenCV barcode detector
+### pyzbar (ZBar) vs OpenCV barcode detector
 
 | | **pyzbar / ZBar** | **OpenCV `BarcodeDetector`** |
 |---|---|---|
@@ -44,7 +51,7 @@ The first stage that succeeds wins. Exit code `0` = barcode found, `2` = not fou
 | **Windows setup** | Pip wheel bundles DLLs | Requires `opencv-contrib-python` (heavier) |
 | **This project** | **Primary choice** — tuned preprocessing pipeline for ZBar | Reasonable fallback if ZBar fails after aggressive preprocessing |
 
-For your ESP32 constraints (160x120, soft bar edges), **ZBar + upscaling/threshold preprocessing** is usually the better first approach.
+For ESP32 constraints (160x120, soft bar edges), **ZBar + upscaling/threshold preprocessing** is usually the better first approach.
 
 ## Hardware context
 
