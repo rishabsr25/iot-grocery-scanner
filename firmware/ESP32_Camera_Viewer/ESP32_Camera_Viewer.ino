@@ -6,7 +6,20 @@
 #include "esp_http_server.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include <Wire.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 #include "secrets.h"
+
+// ---- OLED (I2C bus 0 via Wire; camera SCCB uses bus 1 on GPIO26/27) ----
+#define OLED_SDA         13
+#define OLED_SCL         33
+#define OLED_ADDR        0x3C
+#define OLED_WIDTH       128
+#define OLED_HEIGHT      64
+
+Adafruit_SSD1306 oled(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
+bool oledReady = false;
 
 // ---- Camera pins (your confirmed working config) ----
 #define PWDN_GPIO_NUM    -1
@@ -71,6 +84,93 @@ static esp_err_t stream_handler(httpd_req_t *req) {
   return res;
 }
 
+bool initOled() {
+  Wire.begin(OLED_SDA, OLED_SCL);
+  if (!oled.begin(SSD1306_SWITCHCAPVCC, OLED_ADDR)) {
+    Serial.println("OLED init failed");
+    return false;
+  }
+  oledReady = true;
+  oled.clearDisplay();
+  oled.setTextSize(1);
+  oled.setTextColor(SSD1306_WHITE);
+  oled.setCursor(0, 0);
+  oled.println("Ready to scan");
+  oled.display();
+  return true;
+}
+
+void showOledLines(const String& line1, const String& line2) {
+  if (!oledReady) {
+    return;
+  }
+  oled.clearDisplay();
+  oled.setTextSize(1);
+  oled.setTextColor(SSD1306_WHITE);
+  oled.setCursor(0, 0);
+  oled.println(line1);
+  oled.println(line2);
+  oled.display();
+}
+
+bool jsonStringField(const String& json, const char* key, String& out) {
+  const String needle = String("\"") + key + "\":\"";
+  const int start = json.indexOf(needle);
+  if (start < 0) {
+    return false;
+  }
+  const int valueStart = start + needle.length();
+  const int valueEnd = json.indexOf('"', valueStart);
+  if (valueEnd < 0) {
+    return false;
+  }
+  out = json.substring(valueStart, valueEnd);
+  return true;
+}
+
+bool jsonFirstPrice(const String& json, String& store, float& price) {
+  const int pricesIdx = json.indexOf("\"prices\"");
+  if (pricesIdx < 0) {
+    return false;
+  }
+
+  const int storeIdx = json.indexOf("\"store\":", pricesIdx);
+  if (storeIdx < 0) {
+    return false;
+  }
+  const int storeStart = json.indexOf('"', storeIdx + 8);
+  const int storeEnd = json.indexOf('"', storeStart + 1);
+  if (storeStart < 0 || storeEnd < 0) {
+    return false;
+  }
+  store = json.substring(storeStart + 1, storeEnd);
+
+  const int priceIdx = json.indexOf("\"price\":", storeIdx);
+  if (priceIdx < 0) {
+    return false;
+  }
+  price = json.substring(priceIdx + 8).toFloat();
+  return true;
+}
+
+void showIdentifyOnOled(const String& json) {
+  String productName;
+  String store;
+  float price = 0.0f;
+
+  if (!jsonStringField(json, "product", productName)) {
+    return;
+  }
+  if (!jsonFirstPrice(json, store, price)) {
+    showOledLines(productName, "");
+    return;
+  }
+
+  char priceLine[32];
+  snprintf(priceLine, sizeof(priceLine), "%s $%.2f", store.c_str(), price);
+  showOledLines(productName, priceLine);
+}
+
 bool postFrameToIdentifyServer(camera_fb_t* fb) {
   if (WiFi.status() != WL_CONNECTED) {
     Serial.println("WiFi not connected — cannot POST identify request");
@@ -114,8 +214,12 @@ bool postFrameToIdentifyServer(camera_fb_t* fb) {
   free(body);
 
   if (httpCode > 0) {
+    const String response = http.getString();
     Serial.printf("Identify response (%d):\n", httpCode);
-    Serial.println(http.getString());
+    Serial.println(response);
+    if (httpCode == HTTP_CODE_OK) {
+      showIdentifyOnOled(response);
+    }
   } else {
     Serial.printf("Identify POST failed: %s\n", http.errorToString(httpCode).c_str());
   }
@@ -150,6 +254,7 @@ void buttonTask(void* param) {
     // Detect a fresh press: was HIGH, now LOW (INPUT_PULLUP)
     if (currentButtonState == LOW && lastButtonState == HIGH) {
       vTaskDelay(pdMS_TO_TICKS(50)); // debounce
+      Serial.println("Button pressed");
 
       streamingEnabled = false;
       vTaskDelay(pdMS_TO_TICKS(500)); // let stream pause and free the frame buffer
@@ -163,8 +268,6 @@ void buttonTask(void* param) {
       }
 
       streamingEnabled = true;
-
-      Serial.println("Waiting for next button press...");
     }
 
     lastButtonState = currentButtonState;
@@ -175,6 +278,8 @@ void buttonTask(void* param) {
 void setup() {
   Serial.begin(115200);
   delay(1000);
+
+  initOled();
 
   pinMode(BUTTON_GPIO, INPUT_PULLUP);
 

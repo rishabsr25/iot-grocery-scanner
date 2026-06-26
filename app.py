@@ -3,13 +3,13 @@
 
 from __future__ import annotations
 
-import base64
 import os
 from dataclasses import dataclass
 from pathlib import Path
 
-import google.generativeai as genai
 from flask import Flask, jsonify, render_template_string, request
+from google import genai
+from google.genai import types
 
 
 def load_dotenv() -> None:
@@ -26,11 +26,13 @@ def load_dotenv() -> None:
 
 load_dotenv()
 
-GEMINI_MODEL = "gemini-1.5-flash"
+GEMINI_MODEL = "gemini-3.1-flash-lite"
 GEMINI_PROMPT = (
-    "Look at this image and identify the product. It is one of exactly three items: "
-    "gatorade, lotion, or peanut butter. Reply with ONLY one of these three words: "
-    "gatorade, lotion, or peanutbutter. No other text."
+    "You are looking at a blurry low-resolution camera image. The image contains exactly one of "
+    "these three products: (1) a blue/teal Gatorade sports drink bottle, (2) a tall brown lotion "
+    "bottle with a dark pump cap, (3) a short wide peanut butter jar with a green lid. Look at the "
+    "dominant colors and shape in the image and pick the closest match. Reply with ONLY one word: "
+    "gatorade, lotion, or peanutbutter. Do not say anything else."
 )
 
 PRODUCTS: dict[str, dict] = {
@@ -110,20 +112,13 @@ def identify_image(raw: bytes, mime_type: str) -> MatchResult:
     if not api_key:
         raise ValueError("GEMINI_API_KEY environment variable is not set")
 
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(GEMINI_MODEL)
-
-    image_b64 = base64.b64encode(raw).decode("ascii")
-    response = model.generate_content(
-        [
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[
             GEMINI_PROMPT,
-            {
-                "inline_data": {
-                    "mime_type": mime_type,
-                    "data": image_b64,
-                }
-            },
-        ]
+            types.Part.from_bytes(data=raw, mime_type=mime_type),
+        ],
     )
 
     product_id = parse_gemini_product_id(response.text)
