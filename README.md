@@ -2,14 +2,48 @@
 
 Firmware for an ESP32-WROOM-32 paired with an Adafruit OV5640 camera module, designed to capture barcode images on a button press and stream them over WiFi for decoding. Built as the hardware sensing layer for a larger grocery price optimization project that pulls live pricing via the Kroger and Walmart APIs and calculates optimized shopping routes.
 
-This repo includes ESP32 firmware and a **Python barcode decoder** for low-resolution camera frames.
+This repo includes ESP32 firmware, a **Python identify backend**, a **barcode decoder**, and the **GrocerAI dashboard** web frontend.
+
+## GrocerAI dashboard
+
+Live price-comparison UI from [grocerai-dashboard-hub](https://github.com/rishabsr25/grocerai-dashboard-hub), vendored at `dashboard/`.
+
+### Setup
+
+```powershell
+cd dashboard
+npm install
+copy .env.example .env.local
+# Edit .env.local — set VITE_API_BASE and VITE_ESP32_STREAM_URL
+npm run dev
+```
+
+The dashboard polls `GET /history` from the Flask backend and embeds the ESP32 MJPEG stream at `:81/stream`.
+
+## Identify backend
+
+Flask server (`app.py`) receives camera captures from the ESP32, identifies products via Gemini, and serves scan history.
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+copy .env.example .env
+# Add GEMINI_API_KEY to .env
+python app.py
+```
+
+Endpoints:
+
+- `POST /identify` — multipart image upload (used by ESP32 firmware)
+- `GET /history` — last 5 scans (used by dashboard)
 
 ## ESP32 firmware
 
 Sketch: `firmware/ESP32_Camera_Viewer/`
 
 - MJPEG stream at `http://<esp32-ip>:81/stream`
-- GPIO14 button toggles streaming on/off
+- GPIO14 button captures a frame and POSTs to `POST /identify`
 - QQVGA (160x120), 10 MHz XCLK, single frame buffer (no PSRAM)
 
 ### WiFi credentials
@@ -76,10 +110,6 @@ For ESP32 constraints (160x120, soft bar edges), **ZBar + upscaling/threshold pr
 - ESP32-WROOM-32 (no PSRAM) + Adafruit OV5640
 - Reliable capture at `FRAMESIZE_QQVGA` (160x120) only
 - MJPEG stream at `http://<esp32-ip>:81/stream`
-
-## Next phase (not implemented yet)
-
-ESP32 button press → POST image to backend → decode → price lookup.
 
 ## License
 

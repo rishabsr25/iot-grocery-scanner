@@ -13,3 +13,16 @@ firmware/**/secrets.h
 *.png
 *.bmp
 *.webp
+
+# Frontend (dashboard/)
+dashboard/node_modules
+dashboard/dist
+dashboard/dist-ssr
+dashboard/.output
+dashboard/.vinxi
+dashboard/.tanstack/**
+dashboard/.nitro
+dashboard/.wrangler/
+dashboard/.dev.vars
+dashboard/*.local
+.tmp-grocerai-dashboard/

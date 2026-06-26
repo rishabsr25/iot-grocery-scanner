@@ -4,7 +4,9 @@
 from __future__ import annotations
 
 import os
+from collections import deque
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 from flask import Flask, jsonify, render_template_string, request
@@ -61,6 +63,15 @@ PRODUCTS: dict[str, dict] = {
 
 app = Flask(__name__)
 last_identification: dict | None = None
+scan_history: deque[dict] = deque(maxlen=5)
+
+
+@app.after_request
+def add_cors_headers(response):
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    return response
 
 
 @dataclass(frozen=True)
@@ -77,6 +88,14 @@ class MatchResult:
             "hash_distance": self.hash_distance,
             "prices": self.prices,
         }
+
+
+def record_scan(payload: dict) -> None:
+    entry = {
+        **payload,
+        "scanned_at": datetime.now(UTC).isoformat(),
+    }
+    scan_history.appendleft(entry)
 
 
 def detect_mime_type(raw: bytes) -> str:
@@ -270,7 +289,13 @@ def identify():
 
     payload = result.to_json()
     last_identification = payload
+    record_scan(payload)
     return jsonify(payload)
+
+
+@app.route("/history")
+def history():
+    return jsonify({"history": list(scan_history)})
 
 
 if __name__ == "__main__":

@@ -1,4 +1,5 @@
 #include "esp_camera.h"
+#include "esp_log.h"
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include <WiFiClient.h>
@@ -20,6 +21,15 @@
 
 Adafruit_SSD1306 oled(OLED_WIDTH, OLED_HEIGHT, &Wire, -1);
 bool oledReady = false;
+
+static const uint8_t OLED_MAX_LINES = 8;
+static const uint8_t OLED_LINE_CHARS = 21;
+
+String oledLines[OLED_MAX_LINES];
+uint8_t oledLineCount = 0;
+
+void refreshOledLog();
+void appendOledLine(const String& line);
 
 // ---- Camera pins (your confirmed working config) ----
 #define PWDN_GPIO_NUM    -1
@@ -91,84 +101,111 @@ bool initOled() {
     return false;
   }
   oledReady = true;
-  oled.clearDisplay();
-  oled.setTextSize(1);
-  oled.setTextColor(SSD1306_WHITE);
-  oled.setCursor(0, 0);
-  oled.println("Ready to scan");
-  oled.display();
+  oledLineCount = 0;
+  appendOledLine("Ready to scan");
   return true;
 }
 
-void showOledLines(const String& line1, const String& line2) {
+void refreshOledLog() {
   if (!oledReady) {
     return;
   }
+
   oled.clearDisplay();
   oled.setTextSize(1);
   oled.setTextColor(SSD1306_WHITE);
   oled.setCursor(0, 0);
-  oled.println(line1);
-  oled.println(line2);
+  for (uint8_t i = 0; i < oledLineCount; i++) {
+    oled.println(oledLines[i]);
+  }
   oled.display();
 }
 
+void appendOledLine(const String& line) {
+  if (!oledReady) {
+    return;
+  }
+
+  String truncated = line;
+  if (truncated.length() > OLED_LINE_CHARS) {
+    truncated = truncated.substring(0, OLED_LINE_CHARS);
+  }
+
+  if (oledLineCount < OLED_MAX_LINES) {
+    oledLines[oledLineCount++] = truncated;
+  } else {
+    for (uint8_t i = 0; i < OLED_MAX_LINES - 1; i++) {
+      oledLines[i] = oledLines[i + 1];
+    }
+    oledLines[OLED_MAX_LINES - 1] = truncated;
+  }
+
+  refreshOledLog();
+}
+
 bool jsonStringField(const String& json, const char* key, String& out) {
-  const String needle = String("\"") + key + "\":\"";
-  const int start = json.indexOf(needle);
-  if (start < 0) {
+  const String keyNeedle = String("\"") + key + "\"";
+  const int keyStart = json.indexOf(keyNeedle);
+  if (keyStart < 0) {
     return false;
   }
-  const int valueStart = start + needle.length();
-  const int valueEnd = json.indexOf('"', valueStart);
+
+  int i = keyStart + keyNeedle.length();
+  while (i < (int)json.length() && (json[i] == ' ' || json[i] == ':' || json[i] == '\t')) {
+    i++;
+  }
+  if (i >= (int)json.length() || json[i] != '"') {
+    return false;
+  }
+
+  i++;
+  const int valueEnd = json.indexOf('"', i);
   if (valueEnd < 0) {
     return false;
   }
-  out = json.substring(valueStart, valueEnd);
-  return true;
-}
 
-bool jsonFirstPrice(const String& json, String& store, float& price) {
-  const int pricesIdx = json.indexOf("\"prices\"");
-  if (pricesIdx < 0) {
-    return false;
-  }
-
-  const int storeIdx = json.indexOf("\"store\":", pricesIdx);
-  if (storeIdx < 0) {
-    return false;
-  }
-  const int storeStart = json.indexOf('"', storeIdx + 8);
-  const int storeEnd = json.indexOf('"', storeStart + 1);
-  if (storeStart < 0 || storeEnd < 0) {
-    return false;
-  }
-  store = json.substring(storeStart + 1, storeEnd);
-
-  const int priceIdx = json.indexOf("\"price\":", storeIdx);
-  if (priceIdx < 0) {
-    return false;
-  }
-  price = json.substring(priceIdx + 8).toFloat();
+  out = json.substring(i, valueEnd);
   return true;
 }
 
 void showIdentifyOnOled(const String& json) {
   String productName;
-  String store;
-  float price = 0.0f;
 
   if (!jsonStringField(json, "product", productName)) {
     return;
   }
-  if (!jsonFirstPrice(json, store, price)) {
-    showOledLines(productName, "");
-    return;
+
+  appendOledLine("Scanned: " + productName);
+}
+
+void suppressCameraHalLogs() {
+  // FB-OVF is a benign frame-buffer overflow warning during streaming; hide cam_hal noise.
+  esp_log_level_set("cam_hal", ESP_LOG_NONE);
+}
+
+void drainCameraFrameBuffer() {
+  for (int i = 0; i < 5; i++) {
+    camera_fb_t* stale = esp_camera_fb_get();
+    if (!stale) {
+      break;
+    }
+    esp_camera_fb_return(stale);
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+}
+
+camera_fb_t* captureFrameForIdentify() {
+  drainCameraFrameBuffer();
+
+  for (int attempt = 0; attempt < 3; attempt++) {
+    camera_fb_t* fb = esp_camera_fb_get();
+    if (fb) {
+      return fb;
+    }
+    vTaskDelay(pdMS_TO_TICKS(100));
   }
 
-  char priceLine[32];
-  snprintf(priceLine, sizeof(priceLine), "%s $%.2f", store.c_str(), price);
-  showOledLines(productName, priceLine);
+  return nullptr;
 }
 
 bool postFrameToIdentifyServer(camera_fb_t* fb) {
@@ -259,8 +296,9 @@ void buttonTask(void* param) {
       streamingEnabled = false;
       vTaskDelay(pdMS_TO_TICKS(500)); // let stream pause and free the frame buffer
 
-      camera_fb_t* fb = esp_camera_fb_get();
+      camera_fb_t* fb = captureFrameForIdentify();
       if (!fb) {
+        // FB-OVF during streaming is benign; don't show Error on the OLED for capture misses.
         Serial.println("Camera capture failed");
       } else {
         postFrameToIdentifyServer(fb);
@@ -315,6 +353,7 @@ void setup() {
     Serial.printf("Camera init failed with error 0x%x\n", err);
     return;
   }
+  suppressCameraHalLogs();
   Serial.println("Camera init succeeded!");
 
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
