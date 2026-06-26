@@ -1,5 +1,8 @@
 #include "esp_camera.h"
 #include <WiFi.h>
+#include <HTTPClient.h>
+#include <WiFiClient.h>
+#include <WiFiClientSecure.h>
 #include "esp_http_server.h"
 #include "secrets.h"
 
@@ -24,7 +27,9 @@
 #define BUTTON_GPIO      14
 
 httpd_handle_t stream_httpd = NULL;
-volatile bool streamingEnabled = false;
+volatile bool streamingEnabled = true;
+
+static const char* MULTIPART_BOUNDARY = "----ESP32IdentifyBoundary";
 
 #define PART_BOUNDARY "123456789000000000000987654321"
 static const char* STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=" PART_BOUNDARY;
@@ -62,6 +67,59 @@ static esp_err_t stream_handler(httpd_req_t *req) {
     delay(100);
   }
   return res;
+}
+
+bool postFrameToIdentifyServer(camera_fb_t* fb) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("WiFi not connected — cannot POST identify request");
+    return false;
+  }
+
+  String partHeader = String("--") + MULTIPART_BOUNDARY + "\r\n";
+  partHeader += "Content-Disposition: form-data; name=\"image\"; filename=\"capture.jpg\"\r\n";
+  partHeader += "Content-Type: image/jpeg\r\n\r\n";
+
+  String partFooter = String("\r\n--") + MULTIPART_BOUNDARY + "--\r\n";
+  const size_t bodyLen = partHeader.length() + fb->len + partFooter.length();
+
+  uint8_t* body = (uint8_t*)malloc(bodyLen);
+  if (!body) {
+    Serial.println("Failed to allocate POST body buffer");
+    return false;
+  }
+
+  memcpy(body, partHeader.c_str(), partHeader.length());
+  memcpy(body + partHeader.length(), fb->buf, fb->len);
+  memcpy(body + partHeader.length() + fb->len, partFooter.c_str(), partFooter.length());
+
+  HTTPClient http;
+  http.setTimeout(15000);
+
+  WiFiClient client;
+  if (!http.begin(client, IDENTIFY_URL)) {
+    Serial.println("Failed to connect to identify server");
+    free(body);
+    return false;
+  }
+
+  http.addHeader(
+    "Content-Type",
+    String("multipart/form-data; boundary=") + MULTIPART_BOUNDARY
+  );
+
+  Serial.println("POSTing capture to identify server...");
+  const int httpCode = http.POST(body, bodyLen);
+  free(body);
+
+  if (httpCode > 0) {
+    Serial.printf("Identify response (%d):\n", httpCode);
+    Serial.println(http.getString());
+  } else {
+    Serial.printf("Identify POST failed: %s\n", http.errorToString(httpCode).c_str());
+  }
+
+  http.end();
+  return httpCode == HTTP_CODE_OK;
 }
 
 void startCameraServer() {
@@ -134,18 +192,26 @@ void setup() {
   Serial.print("Stream ready at: http://");
   Serial.print(WiFi.localIP());
   Serial.println(":81/stream");
-  Serial.println("Press the button to start/stop the stream.");
+  Serial.println("Press the button to capture and identify a product.");
 }
 
 void loop() {
   static bool lastButtonState = HIGH;
-  bool currentButtonState = digitalRead(BUTTON_GPIO);
+  const bool currentButtonState = digitalRead(BUTTON_GPIO);
 
-  // Detect a fresh press: was HIGH, now LOW
+  // Detect a fresh press: was HIGH, now LOW (INPUT_PULLUP)
   if (currentButtonState == LOW && lastButtonState == HIGH) {
-    streamingEnabled = !streamingEnabled;
-    Serial.println(streamingEnabled ? "Streaming: ON" : "Streaming: OFF (holding last frame)");
     delay(50); // debounce
+
+    camera_fb_t* fb = esp_camera_fb_get();
+    if (!fb) {
+      Serial.println("Camera capture failed");
+    } else {
+      postFrameToIdentifyServer(fb);
+      esp_camera_fb_return(fb);
+    }
+
+    Serial.println("Waiting for next button press...");
   }
 
   lastButtonState = currentButtonState;
