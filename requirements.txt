@@ -1,4 +1,4 @@
 flask>=3.0.0
-imagehash>=4.3.0
+google-generativeai>=0.8.0
 pillow>=10.0.0
 pyzbar>=0.1.9

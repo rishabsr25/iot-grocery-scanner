@@ -4,6 +4,8 @@
 #include <WiFiClient.h>
 #include <WiFiClientSecure.h>
 #include "esp_http_server.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include "secrets.h"
 
 // ---- Camera pins (your confirmed working config) ----
@@ -138,6 +140,38 @@ void startCameraServer() {
   }
 }
 
+void buttonTask(void* param) {
+  (void)param;
+  bool lastButtonState = HIGH;
+
+  for (;;) {
+    const bool currentButtonState = digitalRead(BUTTON_GPIO);
+
+    // Detect a fresh press: was HIGH, now LOW (INPUT_PULLUP)
+    if (currentButtonState == LOW && lastButtonState == HIGH) {
+      vTaskDelay(pdMS_TO_TICKS(50)); // debounce
+
+      streamingEnabled = false;
+      vTaskDelay(pdMS_TO_TICKS(500)); // let stream pause and free the frame buffer
+
+      camera_fb_t* fb = esp_camera_fb_get();
+      if (!fb) {
+        Serial.println("Camera capture failed");
+      } else {
+        postFrameToIdentifyServer(fb);
+        esp_camera_fb_return(fb);
+      }
+
+      streamingEnabled = true;
+
+      Serial.println("Waiting for next button press...");
+    }
+
+    lastButtonState = currentButtonState;
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   delay(1000);
@@ -193,27 +227,18 @@ void setup() {
   Serial.print(WiFi.localIP());
   Serial.println(":81/stream");
   Serial.println("Press the button to capture and identify a product.");
+
+  xTaskCreatePinnedToCore(
+    buttonTask,
+    "buttonTask",
+    8192,
+    NULL,
+    1,
+    NULL,
+    0
+  );
 }
 
 void loop() {
-  static bool lastButtonState = HIGH;
-  const bool currentButtonState = digitalRead(BUTTON_GPIO);
-
-  // Detect a fresh press: was HIGH, now LOW (INPUT_PULLUP)
-  if (currentButtonState == LOW && lastButtonState == HIGH) {
-    delay(50); // debounce
-
-    camera_fb_t* fb = esp_camera_fb_get();
-    if (!fb) {
-      Serial.println("Camera capture failed");
-    } else {
-      postFrameToIdentifyServer(fb);
-      esp_camera_fb_return(fb);
-    }
-
-    Serial.println("Waiting for next button press...");
-  }
-
-  lastButtonState = currentButtonState;
-  delay(20);
+  vTaskDelay(portMAX_DELAY);
 }

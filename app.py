@@ -1,23 +1,41 @@
 #!/usr/bin/env python3
-"""Flask backend: identify products by perceptual hash against reference images."""
+"""Flask backend: identify products via Google Gemini vision API."""
 
 from __future__ import annotations
 
-import io
+import base64
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
-import imagehash
+import google.generativeai as genai
 from flask import Flask, jsonify, render_template_string, request
-from PIL import Image
 
-APP_DIR = Path(__file__).resolve().parent
-REF_DIRS = (APP_DIR / "references", APP_DIR)
+
+def load_dotenv() -> None:
+    env_path = Path(__file__).resolve().parent / ".env"
+    if not env_path.is_file():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        os.environ.setdefault(key.strip(), value.strip())
+
+
+load_dotenv()
+
+GEMINI_MODEL = "gemini-1.5-flash"
+GEMINI_PROMPT = (
+    "Look at this image and identify the product. It is one of exactly three items: "
+    "gatorade, lotion, or peanut butter. Reply with ONLY one of these three words: "
+    "gatorade, lotion, or peanutbutter. No other text."
+)
 
 PRODUCTS: dict[str, dict] = {
     "gatorade": {
         "name": "Gatorade",
-        "ref_file": "ref_gatorade.png",
         "prices": [
             {"store": "Kroger", "price": 1.29},
             {"store": "Local Market", "price": 1.49, "distance_miles": 2.1},
@@ -25,7 +43,6 @@ PRODUCTS: dict[str, dict] = {
     },
     "lotion": {
         "name": "Lotion",
-        "ref_file": "ref_lotion.png",
         "prices": [
             {"store": "Kroger", "price": 4.99},
             {"store": "Local Market", "price": 5.49, "distance_miles": 2.1},
@@ -33,7 +50,6 @@ PRODUCTS: dict[str, dict] = {
     },
     "peanut_butter": {
         "name": "Peanut butter",
-        "ref_file": "ref_peanutbutter.png",
         "prices": [
             {"store": "Kroger", "price": 3.49},
             {"store": "Local Market", "price": 3.89, "distance_miles": 2.1},
@@ -42,7 +58,6 @@ PRODUCTS: dict[str, dict] = {
 }
 
 app = Flask(__name__)
-reference_hashes: dict[str, imagehash.ImageHash] = {}
 last_identification: dict | None = None
 
 
@@ -62,38 +77,61 @@ class MatchResult:
         }
 
 
-def resolve_ref_path(filename: str) -> Path:
-    for directory in REF_DIRS:
-        path = directory / filename
-        if path.is_file():
-            return path
-    raise FileNotFoundError(f"Reference image not found: {filename}")
+def detect_mime_type(raw: bytes) -> str:
+    if raw.startswith(b"\xff\xd8"):
+        return "image/jpeg"
+    if raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if raw.startswith(b"GIF87a") or raw.startswith(b"GIF89a"):
+        return "image/gif"
+    if raw.startswith(b"RIFF") and raw[8:12] == b"WEBP":
+        return "image/webp"
+    return "image/jpeg"
 
 
-def load_reference_hashes() -> None:
-    reference_hashes.clear()
-    for product_id, product in PRODUCTS.items():
-        path = resolve_ref_path(product["ref_file"])
-        with Image.open(path) as image:
-            reference_hashes[product_id] = imagehash.phash(image.convert("RGB"))
+def parse_gemini_product_id(text: str | None) -> str:
+    if not text:
+        raise ValueError("Empty response from Gemini")
+
+    normalized = text.strip().lower().replace("_", "").replace("-", "").replace(" ", "")
+    aliases = {
+        "gatorade": "gatorade",
+        "lotion": "lotion",
+        "peanutbutter": "peanut_butter",
+    }
+    if normalized in aliases:
+        return aliases[normalized]
+
+    raise ValueError(f"Unrecognized product from Gemini: {text!r}")
 
 
-def identify_image(image: Image.Image) -> MatchResult:
-    upload_hash = imagehash.phash(image.convert("RGB"))
+def identify_image(raw: bytes, mime_type: str) -> MatchResult:
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        raise ValueError("GEMINI_API_KEY environment variable is not set")
 
-    best_id = ""
-    best_distance = float("inf")
-    for product_id, ref_hash in reference_hashes.items():
-        distance = upload_hash - ref_hash
-        if distance < best_distance:
-            best_distance = distance
-            best_id = product_id
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(GEMINI_MODEL)
 
-    product = PRODUCTS[best_id]
+    image_b64 = base64.b64encode(raw).decode("ascii")
+    response = model.generate_content(
+        [
+            GEMINI_PROMPT,
+            {
+                "inline_data": {
+                    "mime_type": mime_type,
+                    "data": image_b64,
+                }
+            },
+        ]
+    )
+
+    product_id = parse_gemini_product_id(response.text)
+    product = PRODUCTS[product_id]
     return MatchResult(
-        product_id=best_id,
+        product_id=product_id,
         name=product["name"],
-        hash_distance=int(best_distance),
+        hash_distance=0,
         prices=product["prices"],
     )
 
@@ -228,19 +266,17 @@ def identify():
 
     try:
         raw = upload.read()
-        with Image.open(io.BytesIO(raw)) as image:
-            result = identify_image(image)
+        if not raw:
+            return jsonify({"error": "Empty image file."}), 400
+        mime_type = detect_mime_type(raw)
+        result = identify_image(raw, mime_type)
     except Exception as exc:
-        return jsonify({"error": f"Could not read image: {exc}"}), 400
+        return jsonify({"error": f"Could not identify image: {exc}"}), 400
 
     payload = result.to_json()
     last_identification = payload
     return jsonify(payload)
 
 
-load_reference_hashes()
-
-
 if __name__ == "__main__":
-    print("Loaded reference hashes:", ", ".join(reference_hashes))
     app.run(host="0.0.0.0", port=5000, debug=True)
