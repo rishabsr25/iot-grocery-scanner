@@ -74,6 +74,12 @@ def add_cors_headers(response):
     return response
 
 
+@app.route("/identify", methods=["OPTIONS"])
+@app.route("/history", methods=["OPTIONS"])
+def cors_preflight():
+    return "", 204
+
+
 @dataclass(frozen=True)
 class MatchResult:
     product_id: str
@@ -96,6 +102,24 @@ def record_scan(payload: dict) -> None:
         "scanned_at": datetime.now(UTC).isoformat(),
     }
     scan_history.appendleft(entry)
+
+
+def price_for_store(prices: list[dict], store_needle: str) -> float | None:
+    for row in prices:
+        if store_needle in row.get("store", "").lower():
+            return row.get("price")
+    return None
+
+
+def enrich_scan(entry: dict) -> dict:
+    prices = entry.get("prices") or []
+    return {
+        **entry,
+        "name": entry.get("product"),
+        "timestamp": entry.get("scanned_at"),
+        "kroger_price": price_for_store(prices, "kroger"),
+        "local_price": price_for_store(prices, "local"),
+    }
 
 
 def detect_mime_type(raw: bytes) -> str:
@@ -295,7 +319,7 @@ def identify():
 
 @app.route("/history")
 def history():
-    return jsonify({"history": list(scan_history)})
+    return jsonify({"history": [enrich_scan(entry) for entry in scan_history]})
 
 
 if __name__ == "__main__":

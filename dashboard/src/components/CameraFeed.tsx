@@ -1,13 +1,19 @@
 import { useState } from "react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { ESP32_STREAM_URL } from "@/lib/config";
 
 type StreamStatus = "loading" | "live" | "error";
 
 export default function CameraFeed() {
   const [status, setStatus] = useState<StreamStatus>("loading");
-  const cacheBust = Date.now();
+  const [streamKey, setStreamKey] = useState(0);
+
+  function retryStream() {
+    setStatus("loading");
+    setStreamKey((k) => k + 1);
+  }
 
   return (
     <Card
@@ -34,16 +40,22 @@ export default function CameraFeed() {
 
       <div className="relative mt-4 overflow-hidden rounded-xl border border-border bg-black/80">
         <img
-          src={`${ESP32_STREAM_URL}?t=${cacheBust}`}
+          key={streamKey}
+          src={`${ESP32_STREAM_URL}?t=${streamKey}`}
           alt="ESP32 live camera feed"
           className="mx-auto block max-h-[320px] w-full object-contain"
           onLoad={() => setStatus("live")}
           onError={() => setStatus("error")}
         />
         {status === "error" && (
-          <div className="absolute inset-0 grid place-items-center bg-background/80 px-6 text-center text-sm text-muted-foreground">
-            Could not load stream at{" "}
-            <code className="mt-1 block text-xs">{ESP32_STREAM_URL}</code>
+          <div className="absolute inset-0 grid place-items-center gap-3 bg-background/80 px-6 text-center text-sm text-muted-foreground">
+            <div>
+              Could not load stream at{" "}
+              <code className="mt-1 block text-xs">{ESP32_STREAM_URL}</code>
+            </div>
+            <Button type="button" variant="outline" size="sm" onClick={retryStream}>
+              Retry stream
+            </Button>
           </div>
         )}
       </div>

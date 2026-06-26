@@ -22,6 +22,7 @@ const ICONS: Record<string, string> = {
   gatorade: "🥤",
   lotion: "🧴",
   "peanut butter": "🥜",
+  peanutbutter: "🥜",
 };
 
 function iconFor(name: string) {

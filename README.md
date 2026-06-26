@@ -18,6 +18,8 @@ copy .env.example .env.local
 npm run dev
 ```
 
+Open **http://localhost:5173** (Vite dev server, port fixed in `dashboard/vite.config.ts`).
+
 The dashboard polls `GET /history` from the Flask backend and embeds the ESP32 MJPEG stream at `:81/stream`.
 
 ## Identify backend
